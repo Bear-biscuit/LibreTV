@@ -1030,62 +1030,106 @@ async function showDetails(id, vod_name, sourceCode) {
             apiParams = '&source=' + sourceCode;
         }
         
-        const response = await fetch('/api/detail?id=' + encodeURIComponent(id) + apiParams);
+        // 添加超时控制
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 15000); // 15秒超时
         
-        const data = await response.json();
-        
-        const modal = document.getElementById('modal');
-        const modalTitle = document.getElementById('modalTitle');
-        const modalContent = document.getElementById('modalContent');
-        
-        // 显示来源信息
-        const sourceName = data.videoInfo && data.videoInfo.source_name ? 
-            ` <span class="text-sm font-normal text-gray-400">(${data.videoInfo.source_name})</span>` : '';
-        
-        // 不对标题进行截断处理，允许完整显示
-        modalTitle.innerHTML = `<span class="break-words">${vod_name || '未知视频'}</span>${sourceName}`;
-        currentVideoTitle = vod_name || '未知视频';
-        
-        if (data.episodes && data.episodes.length > 0) {
-            // 安全处理集数URL
-            const safeEpisodes = data.episodes.map(url => {
-                try {
-                    // 确保URL是有效的并且是http或https开头
-                    return url && (url.startsWith('http://') || url.startsWith('https://'))
-                        ? url.replace(/"/g, '&quot;')
-                        : '';
-                } catch (e) {
-                    return '';
-                }
-            }).filter(url => url); // 过滤掉空URL
+        try {
+            const response = await fetch('/api/detail?id=' + encodeURIComponent(id) + apiParams, {
+                signal: controller.signal
+            });
             
-            // 保存当前视频的所有集数
-            currentEpisodes = safeEpisodes;
-            episodesReversed = false; // 默认正序
-            modalContent.innerHTML = `
-                <div class="flex justify-end mb-2">
-                    <button onclick="copyLinks()" class="px-4 py-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white text-xs font-semibold rounded-lg transition-all duration-300 transform items-center justify-center flex">
-                        <span>复制视频链接</span>
-                    </button>
-                    <button onclick="toggleEpisodeOrder('${sourceCode}')" class="ml-2 px-4 py-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white text-xs font-semibold rounded-lg transition-all duration-300 transform items-center justify-center flex">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v3.586L7.707 9.293a1 1 0 00-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 10.586V7z" clip-rule="evenodd" />
-                        </svg>
-                        <span>倒序排列</span>
-                    </button>
-                </div>
-                <div id="episodesGrid" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
-                    ${renderEpisodes(vod_name, sourceCode)}
-                </div>
-            `;
-        } else {
-            modalContent.innerHTML = '<p class="text-center text-gray-400 py-8">没有找到可播放的视频</p>';
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+                throw new Error(`网络请求失败: ${response.status} ${response.statusText}`);
+            }
+            
+            const data = await response.json();
+            
+            // 检查返回数据
+            if (!data) {
+                throw new Error('服务器返回空数据');
+            }
+            
+            // 检查返回的错误码
+            if (data.code && data.code !== 200) {
+                throw new Error(`API错误: ${data.msg || '未知错误'}`);
+            }
+            
+            const modal = document.getElementById('modal');
+            const modalTitle = document.getElementById('modalTitle');
+            const modalContent = document.getElementById('modalContent');
+            
+            // 检查modal元素是否存在
+            if (!modal || !modalTitle || !modalContent) {
+                console.error('模态框元素未找到', { modal, modalTitle, modalContent });
+                showToast('页面元素加载错误，请刷新页面重试', 'error');
+                hideLoading();
+                return;
+            }
+            
+            // 显示来源信息
+            const sourceName = data.videoInfo && data.videoInfo.source_name ? 
+                ` <span class="text-sm font-normal text-gray-400">(${data.videoInfo.source_name})</span>` : '';
+            
+            // 不对标题进行截断处理，允许完整显示
+            modalTitle.innerHTML = `<span class="break-words">${vod_name || '未知视频'}</span>${sourceName}`;
+            currentVideoTitle = vod_name || '未知视频';
+            
+            if (data.episodes && data.episodes.length > 0) {
+                // 安全处理集数URL
+                const safeEpisodes = data.episodes.map(url => {
+                    try {
+                        // 确保URL是有效的并且是http或https开头
+                        return url && (url.startsWith('http://') || url.startsWith('https://'))
+                            ? url.replace(/"/g, '&quot;')
+                            : '';
+                    } catch (e) {
+                        return '';
+                    }
+                }).filter(url => url); // 过滤掉空URL
+                
+                // 保存当前视频的所有集数
+                currentEpisodes = safeEpisodes;
+                episodesReversed = false; // 默认正序
+                
+                // 只有当集数列表非空时才显示按钮和剧集
+                if (safeEpisodes.length > 0) {
+                    modalContent.innerHTML = `
+                        <div class="flex justify-end mb-2">
+                            <button onclick="copyLinks()" class="px-4 py-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white text-xs font-semibold rounded-lg transition-all duration-300 transform items-center justify-center flex">
+                                <span>复制视频链接</span>
+                            </button>
+                            <button onclick="toggleEpisodeOrder('${sourceCode}')" class="ml-2 px-4 py-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500 hover:from-indigo-600 hover:via-purple-600 hover:to-pink-600 text-white text-xs font-semibold rounded-lg transition-all duration-300 transform items-center justify-center flex">
+                                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                    <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v3.586L7.707 9.293a1 1 0 00-1.414 1.414l3 3a1 1 0 001.414 0l3-3a1 1 0 00-1.414-1.414L11 10.586V7z" clip-rule="evenodd" />
+                                </svg>
+                                <span>倒序排列</span>
+                            </button>
+                        </div>
+                        <div id="episodesGrid" class="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-2">
+                            ${renderEpisodes(vod_name, sourceCode)}
+                        </div>
+                    `;
+                } else {
+                    modalContent.innerHTML = '<p class="text-center text-gray-400 py-8">解析到播放地址，但格式无效</p>';
+                }
+            } else {
+                modalContent.innerHTML = '<p class="text-center text-gray-400 py-8">没有找到可播放的视频</p>';
+            }
+            
+            modal.classList.remove('hidden');
+        } catch (fetchError) {
+            clearTimeout(timeoutId);
+            throw fetchError;
         }
-        
-        modal.classList.remove('hidden');
     } catch (error) {
-        console.error('获取详情错误:', error);
-        showToast('获取详情失败，请稍后重试', 'error');
+        console.error('获取视频详情失败:', error);
+        const errorMessage = error.name === 'AbortError' ? 
+            '获取视频详情超时，请检查网络连接' : 
+            `获取视频详情失败: ${error.message || '未知错误'}`;
+        showToast(errorMessage, 'error');
     } finally {
         hideLoading();
     }
