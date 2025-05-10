@@ -150,6 +150,11 @@ const API_SITES = {
         api: 'https://www.hongniuzy2.com',
         name: '红牛资源',
         key: 'word'
+    },
+    sezy: {
+        api: 'https://www.avre06.com',
+        name: '色资源',
+        adult: true
     }
 
 };
@@ -232,4 +237,4 @@ const CUSTOM_API_CONFIG = {
 };
 
 // 新增隐藏内置黄色采集站API的变量，默认为true
-const HIDE_BUILTIN_ADULT_APIS = true;
+const HIDE_BUILTIN_ADULT_APIS = false;
