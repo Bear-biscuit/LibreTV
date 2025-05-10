@@ -2,12 +2,23 @@
 async function handleApiRequest(url) {
     const customApi = url.searchParams.get('customApi') || '';
     const source = url.searchParams.get('source') || 'heimuer';
+    const page = url.searchParams.get('pg') || '1'; // 添加分页参数，默认为第1页
     
     try {
         if (url.pathname === '/api/search') {
             const searchQuery = url.searchParams.get('wd');
             if (!searchQuery) {
                 throw new Error('缺少搜索参数');
+            }
+            
+            // 聚合搜索处理
+            if (source === 'aggregated') {
+                return await handleAggregatedSearch(searchQuery, page);
+            }
+            
+            // 自定义多源聚合搜索处理
+            if (source === 'custom' && customApi.includes(',')) {
+                return await handleMultipleCustomSearch(searchQuery, customApi, page);
             }
             
             // 验证API和source的有效性
@@ -19,9 +30,22 @@ async function handleApiRequest(url) {
                 throw new Error('无效的API来源');
             }
             
-            const apiUrl = customApi
-                ? `${customApi}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`
-                : `${API_SITES[source].api}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            // 确定搜索参数名
+            let searchParamName = 'wd';
+            if (source !== 'custom' && API_SITES[source].key) {
+                searchParamName = API_SITES[source].key;
+            }
+            
+            // 构建API URL，正确放置搜索词和分页参数
+            let baseUrl = '';
+            if (customApi) {
+                baseUrl = customApi.endsWith('/') ? customApi.slice(0, -1) : customApi;
+            } else {
+                const apiUrl = API_SITES[source].api;
+                baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+            }
+            
+            const apiUrl = `${baseUrl}/api.php/provide/vod/?ac=videolist&${searchParamName}=${encodeURIComponent(searchQuery)}&pg=${page}`;
             
             // 添加超时处理
             const controller = new AbortController();
@@ -56,9 +80,14 @@ async function handleApiRequest(url) {
                     }
                 });
                 
+                // 返回包含分页信息的响应
                 return JSON.stringify({
                     code: 200,
                     list: data.list || [],
+                    page: parseInt(page),
+                    pagecount: data.pagecount || 1,
+                    total: data.total || data.list.length,
+                    limit: data.limit || 20
                 });
             } catch (fetchError) {
                 clearTimeout(timeoutId);
@@ -331,7 +360,7 @@ async function handleSpecialSourceDetail(id, sourceCode) {
 }
 
 // 处理聚合搜索
-async function handleAggregatedSearch(searchQuery) {
+async function handleAggregatedSearch(searchQuery, page = '1') {
     // 获取可用的API源列表（排除aggregated和custom）
     const availableSources = Object.keys(API_SITES).filter(key => 
         key !== 'aggregated' && key !== 'custom'
@@ -344,14 +373,25 @@ async function handleAggregatedSearch(searchQuery) {
     // 创建所有API源的搜索请求
     const searchPromises = availableSources.map(async (source) => {
         try {
-            const apiUrl = `${API_SITES[source].api}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            // 确定搜索参数名
+            let searchParamName = 'wd';
+            if (API_SITES[source].key) {
+                searchParamName = API_SITES[source].key;
+            }
+            
+            // 处理API URL末尾的斜杠
+            const apiUrl = API_SITES[source].api;
+            const baseUrl = apiUrl.endsWith('/') ? apiUrl.slice(0, -1) : apiUrl;
+            
+            // 构建API URL，正确放置搜索词和分页参数
+            const fullUrl = `${baseUrl}/api.php/provide/vod/?ac=videolist&${searchParamName}=${encodeURIComponent(searchQuery)}&pg=${page}`;
             
             // 使用Promise.race添加超时处理
             const timeoutPromise = new Promise((_, reject) => 
                 setTimeout(() => reject(new Error(`${source}源搜索超时`)), 8000)
             );
             
-            const fetchPromise = fetch(PROXY_URL + encodeURIComponent(apiUrl), {
+            const fetchPromise = fetch(PROXY_URL + encodeURIComponent(fullUrl), {
                 headers: API_CONFIG.search.headers
             });
             
@@ -374,10 +414,23 @@ async function handleAggregatedSearch(searchQuery) {
                 source_code: source
             }));
             
-            return results;
+            // 返回包含分页信息的结果
+            return {
+                results: results,
+                source: source,
+                pagecount: data.pagecount || 1,
+                page: parseInt(page),
+                total: data.total || data.list.length
+            };
         } catch (error) {
             console.warn(`${source}源搜索失败:`, error);
-            return []; // 返回空数组表示该源搜索失败
+            return {
+                results: [],
+                source: source,
+                pagecount: 1,
+                page: parseInt(page),
+                total: 0
+            }; // 返回空数组和基本分页信息表示该源搜索失败
         }
     });
     
@@ -385,11 +438,19 @@ async function handleAggregatedSearch(searchQuery) {
         // 并行执行所有搜索请求
         const resultsArray = await Promise.all(searchPromises);
         
+        // 找出pagecount最大值
+        let maxPageCount = 1;
+        resultsArray.forEach(result => {
+            if (result.pagecount > maxPageCount) {
+                maxPageCount = result.pagecount;
+            }
+        });
+        
         // 合并所有结果
         let allResults = [];
-        resultsArray.forEach(results => {
-            if (Array.isArray(results) && results.length > 0) {
-                allResults = allResults.concat(results);
+        resultsArray.forEach(result => {
+            if (Array.isArray(result.results) && result.results.length > 0) {
+                allResults = allResults.concat(result.results);
             }
         });
         
@@ -398,7 +459,10 @@ async function handleAggregatedSearch(searchQuery) {
             return JSON.stringify({
                 code: 200,
                 list: [],
-                msg: '所有源均无搜索结果'
+                msg: '所有源均无搜索结果',
+                page: parseInt(page),
+                pagecount: maxPageCount,
+                total: 0
             });
         }
         
@@ -427,19 +491,25 @@ async function handleAggregatedSearch(searchQuery) {
         return JSON.stringify({
             code: 200,
             list: uniqueResults,
+            page: parseInt(page),
+            pagecount: maxPageCount,
+            total: uniqueResults.length
         });
     } catch (error) {
         console.error('聚合搜索处理错误:', error);
         return JSON.stringify({
             code: 400,
             msg: '聚合搜索处理失败: ' + error.message,
-            list: []
+            list: [],
+            page: parseInt(page),
+            pagecount: 1,
+            total: 0
         });
     }
 }
 
 // 处理多个自定义API源的聚合搜索
-async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
+async function handleMultipleCustomSearch(searchQuery, customApiUrls, page = '1') {
     // 解析自定义API列表
     const apiUrls = customApiUrls.split(CUSTOM_API_CONFIG.separator)
         .map(url => url.trim())
@@ -453,7 +523,31 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
     // 为每个API创建搜索请求
     const searchPromises = apiUrls.map(async (apiUrl, index) => {
         try {
-            const fullUrl = `${apiUrl}${API_CONFIG.search.path}${encodeURIComponent(searchQuery)}`;
+            // 解析自定义API信息
+            let url = apiUrl;
+            let customKey = 'wd'; // 默认使用wd作为搜索参数名
+            
+            // 尝试解析URL是否为JSON格式（包含key属性）
+            try {
+                if (apiUrl.includes('{') && apiUrl.includes('}')) {
+                    const apiObj = JSON.parse(apiUrl);
+                    if (apiObj && apiObj.url) {
+                        url = apiObj.url;
+                        if (apiObj.key) {
+                            customKey = apiObj.key;
+                        }
+                    }
+                }
+            } catch (e) {
+                // 解析失败，使用原始URL
+                console.warn('解析自定义API配置失败:', e);
+            }
+            
+            // 处理API URL末尾的斜杠
+            const baseUrl = url.endsWith('/') ? url.slice(0, -1) : url;
+            
+            // 构建API URL，正确放置搜索词和分页参数
+            const fullUrl = `${baseUrl}/api.php/provide/vod/?ac=videolist&${customKey}=${encodeURIComponent(searchQuery)}&pg=${page}`;
             
             // 使用Promise.race添加超时处理
             const timeoutPromise = new Promise((_, reject) => 
@@ -481,13 +575,26 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
                 ...item,
                 source_name: `${CUSTOM_API_CONFIG.namePrefix}${index+1}`,
                 source_code: 'custom',
-                api_url: apiUrl // 保存API URL以便详情获取
+                api_url: url // 保存API URL以便详情获取
             }));
             
-            return results;
+            // 返回结果和分页信息
+            return {
+                results: results,
+                index: index,
+                pagecount: data.pagecount || 1,
+                page: parseInt(page),
+                total: data.total || data.list.length
+            };
         } catch (error) {
             console.warn(`自定义API ${index+1} 搜索失败:`, error);
-            return []; // 返回空数组表示该源搜索失败
+            return {
+                results: [],
+                index: index,
+                pagecount: 1,
+                page: parseInt(page),
+                total: 0
+            }; // 返回空数组和基本分页信息表示该源搜索失败
         }
     });
     
@@ -495,11 +602,19 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
         // 并行执行所有搜索请求
         const resultsArray = await Promise.all(searchPromises);
         
+        // 找出最大页数
+        let maxPageCount = 1;
+        resultsArray.forEach(result => {
+            if (result.pagecount > maxPageCount) {
+                maxPageCount = result.pagecount;
+            }
+        });
+        
         // 合并所有结果
         let allResults = [];
-        resultsArray.forEach(results => {
-            if (Array.isArray(results) && results.length > 0) {
-                allResults = allResults.concat(results);
+        resultsArray.forEach(result => {
+            if (Array.isArray(result.results) && result.results.length > 0) {
+                allResults = allResults.concat(result.results);
             }
         });
         
@@ -508,7 +623,10 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
             return JSON.stringify({
                 code: 200,
                 list: [],
-                msg: '所有自定义API源均无搜索结果'
+                msg: '所有自定义API源均无搜索结果',
+                page: parseInt(page),
+                pagecount: maxPageCount,
+                total: 0
             });
         }
         
@@ -527,13 +645,19 @@ async function handleMultipleCustomSearch(searchQuery, customApiUrls) {
         return JSON.stringify({
             code: 200,
             list: uniqueResults,
+            page: parseInt(page),
+            pagecount: maxPageCount,
+            total: uniqueResults.length
         });
     } catch (error) {
         console.error('自定义API聚合搜索处理错误:', error);
         return JSON.stringify({
             code: 400,
             msg: '自定义API聚合搜索处理失败: ' + error.message,
-            list: []
+            list: [],
+            page: parseInt(page),
+            pagecount: 1,
+            total: 0
         });
     }
 }

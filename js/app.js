@@ -227,6 +227,9 @@ function renderCustomAPIsList() {
         // 将(18+)标记移到最前面
         const adultTag = api.isAdult ? '<span class="text-xs text-pink-400 mr-1">(18+)</span>' : '';
         
+        // 如果有key参数，显示在URL旁边
+        const keyInfo = api.key ? `<span class="text-xs text-blue-400 ml-1">[${api.key}]</span>` : '';
+        
         apiItem.innerHTML = `
             <div class="flex items-center flex-1 min-w-0">
                 <input type="checkbox" id="custom_api_${index}" 
@@ -237,7 +240,7 @@ function renderCustomAPIsList() {
                     <div class="text-xs font-medium ${textColorClass} truncate">
                         ${adultTag}${api.name}
                     </div>
-                    <div class="text-xs text-gray-500 truncate">${api.url}</div>
+                    <div class="text-xs text-gray-500 truncate">${api.url}${keyInfo}</div>
                 </div>
             </div>
             <div class="flex items-center">
@@ -253,6 +256,12 @@ function renderCustomAPIsList() {
             checkAdultAPIsSelected();
         });
     });
+    
+    // 为所有自定义API复选框添加更改事件监听器
+    const checkboxes = container.querySelectorAll('input[type="checkbox"]');
+    checkboxes.forEach(checkbox => {
+        checkbox.addEventListener('change', updateSelectedAPIs);
+    });
 }
 
 // 编辑自定义API
@@ -265,10 +274,12 @@ function editCustomApi(index) {
     const nameInput = document.getElementById('customApiName');
     const urlInput = document.getElementById('customApiUrl');
     const isAdultInput = document.getElementById('customApiIsAdult');
+    const keyInput = document.getElementById('customApiKey');
     
     nameInput.value = api.name;
     urlInput.value = api.url;
     if (isAdultInput) isAdultInput.checked = api.isAdult || false;
+    if (keyInput) keyInput.value = api.key || '';
     
     // 显示表单
     const form = document.getElementById('addCustomApiForm');
@@ -291,10 +302,12 @@ function updateCustomApi(index) {
     const nameInput = document.getElementById('customApiName');
     const urlInput = document.getElementById('customApiUrl');
     const isAdultInput = document.getElementById('customApiIsAdult');
+    const keyInput = document.getElementById('customApiKey');
     
     const name = nameInput.value.trim();
     let url = urlInput.value.trim();
     const isAdult = isAdultInput ? isAdultInput.checked : false;
+    const key = keyInput ? keyInput.value.trim() : '';
     
     if (!name || !url) {
         showToast('请输入API名称和链接', 'warning');
@@ -313,7 +326,12 @@ function updateCustomApi(index) {
     }
     
     // 更新API信息
-    customAPIs[index] = { name, url, isAdult };
+    const apiObj = { name, url, isAdult };
+    if (key) {
+        apiObj.key = key;
+    }
+    
+    customAPIs[index] = apiObj;
     localStorage.setItem('customAPIs', JSON.stringify(customAPIs));
     
     // 重新渲染自定义API列表
@@ -329,6 +347,7 @@ function updateCustomApi(index) {
     nameInput.value = '';
     urlInput.value = '';
     if (isAdultInput) isAdultInput.checked = false;
+    if (keyInput) keyInput.value = '';
     document.getElementById('addCustomApiForm').classList.add('hidden');
     
     showToast('已更新自定义API: ' + name, 'success');
@@ -341,6 +360,8 @@ function cancelEditCustomApi() {
     document.getElementById('customApiUrl').value = '';
     const isAdultInput = document.getElementById('customApiIsAdult');
     if (isAdultInput) isAdultInput.checked = false;
+    const keyInput = document.getElementById('customApiKey');
+    if (keyInput) keyInput.value = '';
     
     // 隐藏表单
     document.getElementById('addCustomApiForm').classList.add('hidden');
@@ -422,6 +443,8 @@ function cancelAddCustomApi() {
         document.getElementById('customApiUrl').value = '';
         const isAdultInput = document.getElementById('customApiIsAdult');
         if (isAdultInput) isAdultInput.checked = false;
+        const keyInput = document.getElementById('customApiKey');
+        if (keyInput) keyInput.value = '';
         
         // 确保按钮是添加按钮
         restoreAddCustomApiButtons();
@@ -433,10 +456,12 @@ function addCustomApi() {
     const nameInput = document.getElementById('customApiName');
     const urlInput = document.getElementById('customApiUrl');
     const isAdultInput = document.getElementById('customApiIsAdult');
+    const keyInput = document.getElementById('customApiKey');
     
     const name = nameInput.value.trim();
     let url = urlInput.value.trim();
     const isAdult = isAdultInput ? isAdultInput.checked : false;
+    const key = keyInput ? keyInput.value.trim() : '';
     
     if (!name || !url) {
         showToast('请输入API名称和链接', 'warning');
@@ -454,8 +479,13 @@ function addCustomApi() {
         url = url.slice(0, -1);
     }
     
-    // 添加到自定义API列表 - 增加isAdult属性
-    customAPIs.push({ name, url, isAdult });
+    // 添加到自定义API列表 - 增加isAdult和key属性
+    const apiObj = { name, url, isAdult };
+    if (key) {
+        apiObj.key = key;
+    }
+    
+    customAPIs.push(apiObj);
     localStorage.setItem('customAPIs', JSON.stringify(customAPIs));
     
     // 默认选中新添加的API
@@ -476,6 +506,7 @@ function addCustomApi() {
     nameInput.value = '';
     urlInput.value = '';
     if (isAdultInput) isAdultInput.checked = false;
+    if (keyInput) keyInput.value = '';
     document.getElementById('addCustomApiForm').classList.add('hidden');
     
     showToast('已添加自定义API: ' + name, 'success');
@@ -601,8 +632,8 @@ function getCustomApiInfo(customApiIndex) {
     return customAPIs[index];
 }
 
-// 搜索功能 - 修改为支持多选API
-async function search() {
+// 搜索功能 - 修改为支持多选API和分页
+async function search(page = 1) {
     // 密码保护校验
     if (window.isPasswordProtected && window.isPasswordVerified) {
         if (window.isPasswordProtected() && !window.isPasswordVerified()) {
@@ -625,11 +656,15 @@ async function search() {
     showLoading();
     
     try {
-        // 保存搜索历史
-        saveSearchHistory(query);
+        // 保存搜索历史（仅在第一页时保存）
+        if (page === 1) {
+            saveSearchHistory(query);
+        }
         
         // 从所有选中的API源搜索
         let allResults = [];
+        let maxPageCount = 1; // 跟踪最大页数
+        
         const searchPromises = selectedAPIs.map(async (apiId) => {
             try {
                 let apiUrl, apiName;
@@ -638,14 +673,35 @@ async function search() {
                 if (apiId.startsWith('custom_')) {
                     const customIndex = apiId.replace('custom_', '');
                     const customApi = getCustomApiInfo(customIndex);
-                    if (!customApi) return [];
+                    if (!customApi) return { results: [], pagecount: 1 };
                     
-                    apiUrl = customApi.url + API_CONFIG.search.path + encodeURIComponent(query);
+                    // 确定搜索参数名
+                    let searchParamName = 'wd';
+                    if (customApi.key) {
+                        searchParamName = customApi.key;
+                    }
+                    
+                    // 处理API URL末尾的斜杠
+                    const baseUrl = customApi.url.endsWith('/') ? customApi.url.slice(0, -1) : customApi.url;
+                    
+                    // 构建API URL，正确放置搜索词和分页参数
+                    apiUrl = `${baseUrl}/api.php/provide/vod/?ac=videolist&${searchParamName}=${encodeURIComponent(query)}&pg=${page}`;
                     apiName = customApi.name;
                 } else {
                     // 内置API
-                    if (!API_SITES[apiId]) return [];
-                    apiUrl = API_SITES[apiId].api + API_CONFIG.search.path + encodeURIComponent(query);
+                    if (!API_SITES[apiId]) return { results: [], pagecount: 1 };
+                    
+                    // 确定搜索参数名
+                    let searchParamName = 'wd';
+                    if (API_SITES[apiId].key) {
+                        searchParamName = API_SITES[apiId].key;
+                    }
+                    
+                    // 处理API URL末尾的斜杠
+                    const baseUrl = API_SITES[apiId].api.endsWith('/') ? API_SITES[apiId].api.slice(0, -1) : API_SITES[apiId].api;
+                    
+                    // 构建API URL，正确放置搜索词和分页参数
+                    apiUrl = `${baseUrl}/api.php/provide/vod/?ac=videolist&${searchParamName}=${encodeURIComponent(query)}&pg=${page}`;
                     apiName = API_SITES[apiId].name;
                 }
                 
@@ -661,14 +717,17 @@ async function search() {
                 clearTimeout(timeoutId);
                 
                 if (!response.ok) {
-                    return [];
+                    return { results: [], pagecount: 1 };
                 }
                 
                 const data = await response.json();
                 
                 if (!data || !data.list || !Array.isArray(data.list) || data.list.length === 0) {
-                    return [];
+                    return { results: [], pagecount: 1 };
                 }
+                
+                // 获取分页信息
+                const pagecount = data.pagecount || 1;
                 
                 // 添加源信息到每个结果
                 const results = data.list.map(item => ({
@@ -678,20 +737,23 @@ async function search() {
                     api_url: apiId.startsWith('custom_') ? getCustomApiInfo(apiId.replace('custom_', ''))?.url : undefined
                 }));
                 
-                return results;
+                return { results, pagecount };
             } catch (error) {
                 console.warn(`API ${apiId} 搜索失败:`, error);
-                return [];
+                return { results: [], pagecount: 1 };
             }
         });
         
         // 等待所有搜索请求完成
         const resultsArray = await Promise.all(searchPromises);
         
-        // 合并所有结果
-        resultsArray.forEach(results => {
-            if (Array.isArray(results) && results.length > 0) {
-                allResults = allResults.concat(results);
+        // 合并所有结果并获取最大页数
+        resultsArray.forEach(result => {
+            if (Array.isArray(result.results) && result.results.length > 0) {
+                allResults = allResults.concat(result.results);
+            }
+            if (result.pagecount > maxPageCount) {
+                maxPageCount = result.pagecount;
             }
         });
         
@@ -727,6 +789,9 @@ async function search() {
                 </div>
             `;
             hideLoading();
+            
+            // 隐藏分页控件
+            hidePageControls();
             return;
         }
 
@@ -792,22 +857,16 @@ async function search() {
                             
                             <div class="flex justify-between items-center mt-1 pt-1 border-t border-gray-800">
                                 ${sourceInfo ? `<div>${sourceInfo}</div>` : '<div></div>'}
-                                <!-- 接口名称过长会被挤变形
-                                <div>
-                                    <span class="text-gray-500 flex items-center hover:text-blue-400 transition-colors">
-                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                                        </svg>
-                                        播放
-                                    </span>
-                                </div>
-                                -->
                             </div>
                         </div>
                     </div>
                 </div>
             `;
         }).join('');
+        
+        // 添加或更新分页控件
+        updatePageControls(page, maxPageCount, query);
+        
     } catch (error) {
         console.error('搜索错误:', error);
         if (error.name === 'AbortError') {
@@ -815,8 +874,124 @@ async function search() {
         } else {
             showToast('搜索请求失败，请稍后重试', 'error');
         }
+        
+        // 发生错误时隐藏分页控件
+        hidePageControls();
     } finally {
         hideLoading();
+    }
+}
+
+// 更新分页控件
+function updatePageControls(currentPage, totalPages, query) {
+    // 确保存在分页容器
+    let paginationContainer = document.getElementById('paginationContainer');
+    if (!paginationContainer) {
+        // 如果不存在则创建
+        paginationContainer = document.createElement('div');
+        paginationContainer.id = 'paginationContainer';
+        paginationContainer.className = 'flex justify-center items-center my-6 space-x-2';
+        
+        // 将分页容器添加到结果区域后面
+        const resultsArea = document.getElementById('resultsArea');
+        resultsArea.appendChild(paginationContainer);
+    }
+    
+    // 如果只有一页，隐藏分页控件
+    if (totalPages <= 1) {
+        paginationContainer.style.display = 'none';
+        return;
+    }
+    
+    // 显示分页控件
+    paginationContainer.style.display = 'flex';
+    
+    // 构建分页HTML
+    let paginationHTML = '';
+    
+    // 上一页按钮
+    const prevDisabled = currentPage <= 1;
+    paginationHTML += `
+        <button onclick="${prevDisabled ? '' : `search(${currentPage - 1})`}" 
+                class="px-3 py-1 rounded-lg ${prevDisabled ? 'bg-[#333] text-gray-500 cursor-not-allowed' : 'bg-[#222] hover:bg-[#333] text-white cursor-pointer'}">
+            上一页
+        </button>
+    `;
+    
+    // 页码按钮 - 显示当前页附近的页码
+    const maxButtonsToShow = 5; // 最多显示的页码按钮数
+    let startPage = Math.max(1, currentPage - Math.floor(maxButtonsToShow / 2));
+    let endPage = Math.min(totalPages, startPage + maxButtonsToShow - 1);
+    
+    // 调整起始页码，确保显示足够的页码按钮
+    if (endPage - startPage + 1 < maxButtonsToShow && startPage > 1) {
+        startPage = Math.max(1, endPage - maxButtonsToShow + 1);
+    }
+    
+    // 第一页按钮（如果起始页不是第一页）
+    if (startPage > 1) {
+        paginationHTML += `
+            <button onclick="search(1)" class="px-3 py-1 rounded-lg bg-[#222] hover:bg-[#333] text-white">
+                1
+            </button>
+        `;
+        
+        // 如果第一页和起始页之间有间隔，显示省略号
+        if (startPage > 2) {
+            paginationHTML += `
+                <span class="px-2 text-gray-500">...</span>
+            `;
+        }
+    }
+    
+    // 页码按钮
+    for (let i = startPage; i <= endPage; i++) {
+        const isActive = i === currentPage;
+        paginationHTML += `
+            <button onclick="${isActive ? '' : `search(${i})`}" 
+                    class="px-3 py-1 rounded-lg ${isActive ? 'bg-blue-600 text-white cursor-default' : 'bg-[#222] hover:bg-[#333] text-white cursor-pointer'}">
+                ${i}
+            </button>
+        `;
+    }
+    
+    // 最后一页按钮（如果结束页不是最后一页）
+    if (endPage < totalPages) {
+        // 如果结束页和最后一页之间有间隔，显示省略号
+        if (endPage < totalPages - 1) {
+            paginationHTML += `
+                <span class="px-2 text-gray-500">...</span>
+            `;
+        }
+        
+        paginationHTML += `
+            <button onclick="search(${totalPages})" class="px-3 py-1 rounded-lg bg-[#222] hover:bg-[#333] text-white">
+                ${totalPages}
+            </button>
+        `;
+    }
+    
+    // 下一页按钮
+    const nextDisabled = currentPage >= totalPages;
+    paginationHTML += `
+        <button onclick="${nextDisabled ? '' : `search(${currentPage + 1})`}" 
+                class="px-3 py-1 rounded-lg ${nextDisabled ? 'bg-[#333] text-gray-500 cursor-not-allowed' : 'bg-[#222] hover:bg-[#333] text-white cursor-pointer'}">
+            下一页
+        </button>
+    `;
+    
+    // 更新分页容器
+    paginationContainer.innerHTML = paginationHTML;
+    
+    // 滚动到页面顶部
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// 隐藏分页控件
+function hidePageControls() {
+    const paginationContainer = document.getElementById('paginationContainer');
+    if (paginationContainer) {
+        paginationContainer.style.display = 'none';
     }
 }
 

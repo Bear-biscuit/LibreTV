@@ -142,6 +142,16 @@ const API_SITES = {
         api: 'https://ikunzyapi.com',
         name: 'iKun资源'
     },
+    lzizy: {
+        api: 'https://cj.lziapi.com',
+        name: '量子资源站'
+    },
+    hongniu: {
+        api: 'https://www.hongniuzy2.com',
+        name: '红牛资源',
+        key: 'word'
+    }
+
 };
 
 // 添加聚合搜索的配置选项
